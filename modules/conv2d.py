@@ -14,7 +14,9 @@ class Conv2D(Layer):
         
         # MODIFICAR: Añadir nuevo if-else para otros algoritmos de convolución
         if conv_algo == 0:
-            self.mode = 'direct' 
+            self.mode = 'direct'
+        elif conv_algo == 1:
+            self.mode = 'im2col'     
         else:
             print(f"Algoritmo {conv_algo} no soportado aún")
             self.mode = 'direct' 
@@ -60,8 +62,10 @@ class Conv2D(Layer):
         # PISTA: Usar estos if-else si implementas más algoritmos de convolución
         if self.mode == 'direct':
             return self._forward_direct(input)
+        elif self.mode == 'im2col':
+            return self._forward_im2col(input)
         else:
-            raise ValueError("Mode must be 'direct")
+            raise ValueError("Mode must be 'direct' or '2imcol'")
 
     def backward(self, grad_output, learning_rate):
         # ESTO NO ES NECESARIO YA QUE NO VAIS A HACER BACKPROPAGATION
@@ -137,3 +141,35 @@ class Conv2D(Layer):
         return grad_input
 
     # PISTA: Se te ocurren otros algoritmos de convolución?
+    def _im2col(self, input):
+        batch_size, in_channels, in_h, in_w = input.shape
+        k_h, k_w = self.kernel_size, self.kernel_size
+        out_h = (in_h - k_h) // self.stride + 1
+        out_w = (in_w - k_w) // self.stride + 1
+
+        cols = np.zeros((batch_size, in_channels, k_h, k_w, out_h, out_w), dtype=np.float32)
+        for y in range(k_h):
+            y_max = y + self.stride * out_h
+            for x in range(k_w):
+                x_max = x + self.stride * out_w
+                cols[:, :, y, x, :, :] = input[:, :, y:y_max:self.stride, x:x_max:self.stride]
+
+        cols = cols.transpose(0, 4, 5, 1, 2, 3).reshape(batch_size * out_h * out_w, -1)
+        return cols, out_h, out_w
+
+    def _forward_im2col(self, input):
+        batch_size, in_channels, in_h, in_w = input.shape
+        k_h, k_w = self.kernel_size, self.kernel_size
+
+        if self.padding > 0:
+            input = np.pad(input,
+                           ((0, 0), (0, 0), (self.padding, self.padding), (self.padding, self.padding)),
+                           mode='constant').astype(np.float32)
+
+        cols, out_h, out_w = self._im2col(input)
+        kernels_reshaped = self.kernels.reshape(self.out_channels, -1)
+        output = (kernels_reshaped @ cols.T).T
+        output = output.reshape(batch_size, out_h, out_w, self.out_channels)
+        output = output.transpose(0, 3, 1, 2)
+        output += self.biases[np.newaxis, :, np.newaxis, np.newaxis]
+        return output
